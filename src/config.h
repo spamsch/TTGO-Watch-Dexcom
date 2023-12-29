@@ -37,6 +37,7 @@
             #define USE_PSRAM_ALLOC_LVGL                    /** @brief enabled LVGL to use PSRAM */ 
             #define ENABLE_WEBSERVER                        /** @brief To disable built-in webserver, comment this line */
             #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
         #elif defined( LILYGO_WATCH_2020_V2 )
             #undef LILYGO_WATCH_LVGL
             #define HARDWARE_NAME   "T-Watch2020V2"
@@ -45,19 +46,22 @@
             #define USE_PSRAM_ALLOC_LVGL                    /** @brief enabled LVGL to use PSRAM */ 
             #define ENABLE_WEBSERVER                        /** @brief To disable built-in webserver, comment this line */
             #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
         #elif defined( LILYGO_WATCH_2020_V3 )
             #undef LILYGO_WATCH_LVGL
             #define HARDWARE_NAME   "T-Watch2020V3"
             #define RES_X_MAX       240
             #define RES_Y_MAX       240
             #define USE_PSRAM_ALLOC_LVGL                    /** @brief enabled LVGL to use PSRAM */ 
-            #define ENABLE_WEBSERVER                        /** @brief To disable built-in webserver, comment this line */
-            #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            //#define ENABLE_WEBSERVER                        /** @brief To disable built-in webserver, comment this line */
+            //#define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
         #elif defined( LILYGO_WATCH_2021 )
             #define HARDWARE_NAME   "T-Watch2021"
             #define RES_X_MAX       240
             #define RES_Y_MAX       240
             #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
             #define ONLY_ESSENTIAL
             #define ROUND_DISPLAY
             #define NO_UPDATES
@@ -67,6 +71,7 @@
             #define RES_Y_MAX       960
             #define ENABLE_WEBSERVER                        /** @brief To disable built-in webserver, comment this line */
             #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
             #define NO_WATCHFACE
         #elif defined( M5CORE2 )
             #define HARDWARE_NAME   "m5stack-core2"
@@ -80,6 +85,7 @@
             #define RES_Y_MAX       320
             #define USE_PSRAM_ALLOC_LVGL                    /** @brief enabled LVGL to use PSRAM */ 
             #define ENABLE_FTPSERVER                        /** @brief To disable built-in ftpserver, comment this line */
+            #define ENABLE_GADGETBRIDGE_BLE_SERVER          /** @brief to disabled built in BLE server for gadgetbridge, comment this line */
             #define NO_WATCHFACE
         #else
             #error "no destination hardware version defined"

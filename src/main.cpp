@@ -21,7 +21,7 @@
 
 void setup() {
     /**
-     * hardware setup
+     * hardware setup including splash screen display through lvgl
      */
     hardware_setup();
     /**

@@ -21,6 +21,10 @@
 #include "device.h"
 #include "compass.h"
 
+#ifdef USE_AS_DEXCOM_DISPLAY
+#include "dexcom/dexcomg6.h"
+#endif
+
 #include "utils/fakegps.h"
 #include "gui/splashscreen.h"
 #include "gui/screenshot.h"
@@ -272,6 +276,11 @@ void hardware_setup( void ) {
     fakegps_setup();
     blectl_read_config();
 
+    #ifdef USE_AS_DEXCOM_DISPLAY
+    splash_screen_stage_update("init dexcom", 60);
+    dexcomg6_setup();
+    #endif
+
     splash_screen_stage_update( "init gui", 80 );
     splash_screen_stage_finish();
 }
@@ -287,7 +296,9 @@ void hardware_post_setup( void ) {
     powermgm_set_event( POWERMGM_WAKEUP );
 
     #ifndef NO_BLUETOOTH
-        blectl_setup();
+        #ifdef ENABLE_GADGETBRIDGE_BLE_SERVER
+            blectl_setup();
+        #endif
     #endif
 
     display_set_brightness( display_get_brightness() );
