@@ -15,11 +15,14 @@
 #include "rtcctl.h"
 #include "sdcard.h"
 #include "wifictl.h"
-#include "blectl.h"
 #include "callback.h"
 #include "sensor.h"
 #include "device.h"
 #include "compass.h"
+
+#ifdef ENABLE_GADGETBRIDGE_BLE_SERVER
+#include "blectl.h"
+#endif
 
 #ifdef USE_AS_DEXCOM_DISPLAY
 #include "dexcom/dexcomg6.h"
@@ -274,10 +277,13 @@ void hardware_setup( void ) {
     sensor_setup();
     sound_read_config();
     fakegps_setup();
+
+    #ifdef ENABLE_GADGETBRIDGE_BLE_SERVER
     blectl_read_config();
+    #endif
 
     #ifdef USE_AS_DEXCOM_DISPLAY
-    splash_screen_stage_update("init dexcom", 60);
+    splash_screen_stage_update("init dexcom", 70);
     dexcomg6_setup();
     #endif
 

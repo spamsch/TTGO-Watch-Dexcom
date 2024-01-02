@@ -27,4 +27,8 @@
      */
     void dexcomg6_setup(void);
 
+    void dexcomg6_initialize_connection();
+
+    bool dexcomg6_save_backfill(std::string backfillParseMessage);
+
 #endif // _DEXCOM_H

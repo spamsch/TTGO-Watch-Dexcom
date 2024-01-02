@@ -10,6 +10,7 @@
  *
  *   It will first scan for devices and then connect to a Dexcom device with
  *   a specific advertised UUID and a name that starts with Dexcom.
+ * 
  ****************************************************************************/
 
 /*
@@ -80,7 +81,7 @@ static NimBLERemoteCharacteristic *pRemoteModel;
 static NimBLERemoteCharacteristic *pRemoteFirmware;
 
 // The identifier that can be found on the transmitter and also in the Dexcom app
-static std::string transmitterIdentifier = "xxxxxx";
+static std::string transmitterIdentifier = "8QL745";
 
 // Byte values for the notification / indication.
 const uint8_t bothOff[] = {0x0, 0x0};
@@ -88,11 +89,13 @@ const uint8_t notificationOn[] = {0x1, 0x0};
 const uint8_t indicationOn[] = {0x2, 0x0};
 const uint8_t bothOn[] = {0x3, 0x0};
 
-// Application state such as connection and bonding
+// Application state such as connection and bonding.
+// Declared volatile as these will be changed by tasks.
 static volatile boolean connected = false;
-static volatile boolean bonding = false;
+static volatile boolean bondingCanProceed = false;
 static volatile boolean forceRebonding = false;
 static volatile boolean bondingCompleted = false;
+
 static std::string backfillStream = "";
 static std::string AuthCallbackResponse = "";
 static std::string ControlCallbackResponse = "";
@@ -107,20 +110,36 @@ RTC_SLOW_ATTR static uint16_t glucoseValues[saveLastXValues] = {0}; // Reserve s
  * CALLBACKS
  */
 
+/**
+ * @brief Callback that gets notified whenever the connection state changes
+ * 
+ * Will be set up as a callback before NimBLEDevice::createClient gets called. It
+ * will set a global status variable `connected` to the state of the connection.
+ * 
+ */
 class DexcomClientCallback : public NimBLEClientCallbacks
 {
 
     void onDisconnect(NimBLEClient *pClient)
     {
+        log_i("Dexcom BLE disconnected");
         connected = false;
     }
 
     void onConnect(NimBLEClient *pClient)
     {
+        log_i("Dexcom BLE connected");
         connected = true;
     }
 };
 
+/**
+ * @brief Will be set as the callback for bonding parameters.
+ * 
+ * This is important to ensure that any request to pair with security is
+ * answered positively.
+ * 
+ */
 class DexcomSecurityCallback : public NimBLESecurityCallbacks
 {
     uint32_t onPassKeyRequest()
@@ -146,15 +165,21 @@ class DexcomSecurityCallback : public NimBLESecurityCallbacks
     }
 };
 
+/**
+ * @brief Callback that holds an executor that is called for each advertised device found
+ * 
+ */
 class AllAdvertisedDeviceCallback : public NimBLEAdvertisedDeviceCallbacks
 {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) // Called for each advertising BLE server.
     {
-        log_d("Found advertised device addr %s name %s isadvdex %s", advertisedDevice->getAddress().toString(), advertisedDevice->getName(), advertisedDevice->isAdvertisingService(advertisingServiceUUID));
         if (advertisedDevice->haveServiceUUID() && advertisedDevice->isAdvertisingService(advertisingServiceUUID) && // If the advertised service is the dexcom advertise service (not the main service that contains the characteristics).
             advertisedDevice->haveName() && advertisedDevice->getName() == ("Dexcom" + transmitterIdentifier.substr(4, 2)))
         {
+            log_i("Found Dexcom device. Stopping scan and trying to connect.");
             NimBLEDevice::getScan()->stop();
+            // yields something like [I][dexcomg6.cpp:211] onResult(): Name: Dexcom45, Address: e1:4f:1c:93:9f:8b, manufacturer data: d000f103, serviceUUID: 0xfebc
+            log_i("%s", advertisedDevice->toString().c_str());
             dexcomAdvertised = advertisedDevice;
             dexcomg6_initialize_connection();
         }
@@ -363,7 +388,7 @@ bool get_characteristic(NimBLERemoteCharacteristic **pRemoteCharacteristic, NimB
  */
 bool dexcomg6_authenticate(bool useAlternativeChannel, std::string transmitterIdentifierProvided)
 {
-    log_i("Starting to authenticate against Dexcom device. Channel %b Transmitter %s", useAlternativeChannel, transmitterIdentifierProvided);
+    log_i("Starting to authenticate against Dexcom device. Channel %i Transmitter %s", useAlternativeChannel, transmitterIdentifierProvided);
     std::string authRequestTxMessage = {0x01, 0x19, static_cast<char>(0xF3), static_cast<char>(0x89), static_cast<char>(0xF8), static_cast<char>(0xB7), 0x58, 0x41, 0x33}; // 0x02                 // 10byte, first byte = opcode (fix), [1] - [8] random bytes as challenge for the transmitter to encrypt,
     authRequestTxMessage += useAlternativeChannel ? 0x01 : 0x02;                                                                                                           // last byte 0x02 = normal bt channel, 0x01 alternative bt channel
     dexcomg6_auth_send_value(authRequestTxMessage);
@@ -372,7 +397,7 @@ bool dexcomg6_authenticate(bool useAlternativeChannel, std::string transmitterId
     std::string authChallengeRxMessage = dexcomg6_auth_wait_to_receive_cb(); // Wait until we received data from the notify callback.
     if ((authChallengeRxMessage.length() != 17) || (authChallengeRxMessage[0] != 0x03))
     {
-        log_e("Error wrong length or opcode!");
+        log_e("Error wrong length or opcode from Dexcom authentication! %s", authChallengeRxMessage.c_str());
         return false;
     }
     std::string tokenHash = "";
@@ -397,17 +422,19 @@ bool dexcomg6_authenticate(bool useAlternativeChannel, std::string transmitterId
     std::string authStatusRXMessage = dexcomg6_auth_wait_to_receive_cb(); // Response { 0x05, 0x01 = authenticated / 0x02 = not authenticated, 0x01 = no bonding, 0x02 bonding
     if (authStatusRXMessage.length() == 3 && authStatusRXMessage[1] == 1) // correct response is 0x05 0x01 0x02
     {
-        log_i("Authenticated!");
-        bonding = authStatusRXMessage[2] != 0x01;
+        log_i("Authenticated with Dexcom transmitter!");
+        bondingCanProceed = authStatusRXMessage[2] != 0x01;
         return true;
     }
     else
-        log_i("Authenticated FAILED!");
+        log_i("Authenticated with Dexcom transmitter FAILED!");
     return false;
 }
 
 /**
- * Enables BLE bonding.
+ * @brief Setup bonding parameters by making sure that encryption is correct
+ * 
+ * @return true in all cases
  */
 bool dexcomg6_setup_bonding()
 {
@@ -430,27 +457,30 @@ bool dexcomg6_setup_bonding()
  */
 bool dexcomg6_request_bond()
 {
-    if (bonding)
+    if (bondingCanProceed)
     {
         if (forceRebonding) // Enable bonding after successful auth and before sending bond request to transmitter.
             dexcomg6_setup_bonding();
 
-        log_i("Sending Bond Request.");
+        log_i("Sending bonding request to Dexcom transmitter");
+
         // Send KeepAliveTxMessage
         std::string keepAliveTxMessage = {0x06, 0x19}; // Opcode 2 byte = 0x06, 25 as hex (0x19)
         dexcomg6_auth_send_value(keepAliveTxMessage);
+
         // Send BondRequestTxMessage
-        std::string bondRequestTxMessage = {0x07}; // Send bond command.
+        std::string bondRequestTxMessage = {0x07}; // Send bonding command.
         dexcomg6_auth_send_value(bondRequestTxMessage);
-        // Wait for bonding to finish
-        log_i("Waiting for bond.");
+
+        // Wait for bonding to finish. Will be set by DexcomSecurityCallback::onAuthenticationComplete
+        log_i("Waiting for bonding with transmitter");
         while (bondingCompleted == false)
             ; // Barrier waits until bonding has finished, IMPORTANT to set the bondingFinished variable to sig_atomic_t OR volatile
-        // Wait
-        log_i("Bonding finished.");
+        log_i("Bonding with Dexcom finished.");
     }
     else
         log_i("Transmitter does not want to (re)bond so DONT send bond request (already bonded).");
+
     return true;
 }
 
@@ -759,7 +789,7 @@ bool dexcomg6_force_register_for_service_notification_and_indication(notify_call
 {
     pBLERemoteCharacteristic->subscribe(isNotify, _callback, false);                                            // Register first for indication(/notification) (because this is the correct one)
     pBLERemoteCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t *)bothOn, 2, true); // True to wait for acknowledge, set to both, manually set the bytes because there is no such funktion to set both.
-    log_i(" - FORCE registered for indicate and notify on UUID: %s", pBLERemoteCharacteristic->getUUID().toString().c_str());
+    log_d(" - FORCE registered for indicate and notify on UUID: %s", pBLERemoteCharacteristic->getUUID().toString().c_str());
     return true;
 }
 
@@ -783,38 +813,38 @@ bool dexcomg6_register_cb_for_indication(notify_callback _callback, BLERemoteCha
 
 static bool dexcomg6_powermgm_event_cb(EventBits_t event, void *arg)
 {
+    log_i("Powermgmt called for Dexcom");
+    switch( event ) {
+        case POWERMGM_STANDBY:  log_i("Standby requested but denying to allow connection keep alive");
+                                return false;
+        case POWERMGM_WAKEUP:   log_i("Wakeup - checking if connection still active");
+                                if (!connected) NimBLEDevice::getScan()->start(0, true);
+                                return true;
+    }
     return (true);
-}
-
-void dexcomg6_initialize_scan_parameters()
-{
-    log_i("Initializing bluetooth scan parameters. Looking for dexcom advertising UUID %s", advertisingServiceUUID.toString().c_str());
-    NimBLEDevice::init("TWatch2020v3");
-    NimBLEScan *pBLEScan = NimBLEDevice::getScan();                            // Retrieve a Scanner.
-    pBLEScan->setAdvertisedDeviceCallbacks(new AllAdvertisedDeviceCallback()); // Set the callback to informed when a new device was detected.
-    pBLEScan->setInterval(100);                                                // 100 works                                                                             // The time in ms how long each search intervall last. Important for fast scanning so we dont miss the transmitter waking up.
-    pBLEScan->setWindow(99);                                                   // 60-99 works                                                                              // The actual time that will be searched. Interval - Window = time the esp is doing nothing (used for energy efficiency).
-    pBLEScan->setActiveScan(false);
 }
 
 /**
  * @brief called by AllAdvertisedDeviceCallback->onResult when a Dexcom device has been found.
- * 
+ *
  * Initializes the connection by connecting to services and then setting up characteristics.
-*/
+ */
 void dexcomg6_initialize_connection()
 {
     if (dexcomAdvertised != NULL)
     {
+        log_d("Setup bonding with encryption parameters");
         dexcomg6_setup_bonding();
 
         pClient = NimBLEDevice::createClient();
         pClient->setClientCallbacks(new DexcomClientCallback());
-        connected = pClient->connect();
-        log_i("Connection to Dexcom advertising service has been established: %b", connected);
+        log_d("Before connection to Dexcom as a client");
+        connected = pClient->connect(dexcomAdvertised);
 
         if (connected)
         {
+            log_i("Connection to Dexcom advertising service has been established");
+
             // A BLE server can provide multiple services that are identified by a UUID
             NimBLERemoteService *pGlucoseValueService = pClient->getService(glucoseValuesServiceUUID);
             if (pGlucoseValueService == nullptr)
@@ -843,18 +873,51 @@ void dexcomg6_initialize_connection()
                     get_characteristic(&pRemoteModel, pDeviceInfoService, modelCharacteristicUUID);
                     get_characteristic(&pRemoteFirmware, pDeviceInfoService, firmwareCharacteristicUUID);
 
+                    log_d("Forcing registration of notifications for Dexcom authentication service");
                     dexcomg6_force_register_for_service_notification_and_indication(indicateAuthCallback, pRemoteAuthentication, false);
 
-                    if (pRemoteManufacturer->canRead()) {
+                    if (pRemoteManufacturer->canRead())
+                    {
                         log_i("Found Dexcom manufacturer %s", pRemoteManufacturer->readValue().c_str());
                         log_i("Found Dexcom model name %s", pRemoteModel->readValue().c_str());
                         log_i("Found Dexcom firmware ident %s", pRemoteFirmware->readValue().c_str());
-                        dexcomg6_authenticate(false, transmitterIdentifier);
+                        pClient->disconnect();
+                        /*bool authenticatedOk = dexcomg6_authenticate(true, transmitterIdentifier);
+                        if (authenticatedOk)
+                        {
+                            bool bonded = dexcomg6_request_bond();
+                            if (bonded)
+                            {
+                                dexcomg6_force_register_for_service_notification_and_indication(indicateControlCallback, pRemoteControl, false);
+                            }
+                        }*/
+                    }
+                    else
+                    {
+                        pClient->disconnect();
+                        log_e("Could not read Dexcom manufacturing information");
                     }
                 }
             }
         }
+        else {
+            log_e("Could not connect to Dexcom device");
+            pClient->disconnect();
+        }
     }
+}
+
+void dexcomg6_initialize_scan_parameters()
+{
+    log_i("Initializing bluetooth scan parameters. Looking for dexcom advertising UUID %s", advertisingServiceUUID.toString().c_str());
+    NimBLEDevice::init("TWatch2020v3");
+
+    // this is a singleton and will always return the same scan class
+    NimBLEScan *pBLEScan = NimBLEDevice::getScan();                            // Retrieve a Scanner.
+    pBLEScan->setAdvertisedDeviceCallbacks(new AllAdvertisedDeviceCallback()); // Set the callback to informed when a new device was detected.
+    pBLEScan->setInterval(100);                                                // 100 works                                                                             // The time in ms how long each search intervall last. Important for fast scanning so we dont miss the transmitter waking up.
+    pBLEScan->setWindow(99);                                                   // 60-99 works                                                                              // The actual time that will be searched. Interval - Window = time the esp is doing nothing (used for energy efficiency).
+    pBLEScan->setActiveScan(false);
 }
 
 void dexcomg6_setup(void)
@@ -862,7 +925,7 @@ void dexcomg6_setup(void)
     powermgm_register_cb(POWERMGM_STANDBY | POWERMGM_WAKEUP | POWERMGM_SILENCE_WAKEUP, dexcomg6_powermgm_event_cb, "dexcom g6 powermgmt event");
     dexcomg6_initialize_scan_parameters();
 
-    // start scan and do not block
+    /// start scan and upon finding devices call @see{AllAdvertisedCallback::onConnect} which will take care of handling the next steps
     log_i("Starting scanning of bluetooth devices. Dexcom is not advertising all the time so a connection might take a while");
     NimBLEDevice::getScan()->start(0, true);
 }
